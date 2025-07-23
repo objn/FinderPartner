@@ -1,5 +1,16 @@
-torch>=2.0.0
+torch>=2.2.0
+transformers>=4.41.0
+datasets>=2.19.0
+torchvision>=0.17.0
 open_clip_torch>=2.24.0
 pillow>=10.0.0
+pyyaml>=6.0
 tqdm>=4.66.0
+wandb>=0.17.0
 python-dotenv>=1.0.0
+
+# Optional dependencies for extended features
+# Install with: pip install gradio onnxruntime
+# gradio>=4.0.0  # For web demo
+# onnxruntime>=1.16.0  # For ONNX export and inference
+# pandas>=2.0.0  # For advanced data handling

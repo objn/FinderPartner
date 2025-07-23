@@ -238,13 +238,138 @@ PRETRAINED=openai      # หรือ laion2b_s34b_b79k, etc.
 python src/main.py --prompt "test" --verbose
 ```
 
+## 🎓 CLIP Training Pipeline
+
+FinderPartner now includes a complete CLIP training pipeline for fine-tuning models on custom image-caption datasets.
+
+### Prerequisites
+
+```bash
+# Check system requirements
+python scripts/check_env.py
+```
+
+### Training Setup
+
+1. **Prepare Your Dataset**
+   
+   Organize your data as follows:
+   ```
+   data/
+   ├── images/
+   │   ├── train/
+   │   │   ├── img001.jpg
+   │   │   └── img002.jpg
+   │   └── val/
+   │       ├── img001.jpg
+   │       └── img002.jpg
+   ├── captions_train.csv
+   └── captions_val.csv
+   ```
+   
+   CSV format: `filename,caption`
+   ```csv
+   filename,caption
+   img001.jpg,Beautiful Asian woman with long hair
+   img002.jpg,Young girl with glasses and bright smile
+   ```
+
+2. **Configure Training**
+   
+   Edit `configs/clip_base.yaml`:
+   ```yaml
+   # Model Configuration
+   model_name: openai/clip-vit-base-patch32
+   batch_size: 32  # Will auto-reduce if OOM
+   epochs: 5
+   lr: 5.0e-5
+   
+   # Data paths
+   train_csv: data/captions_train.csv
+   val_csv: data/captions_val.csv
+   train_images_dir: data/images/train
+   val_images_dir: data/images/val
+   ```
+
+3. **Start Training**
+   
+   ```bash
+   # Basic training
+   python src/train_clip.py --config configs/clip_base.yaml
+   
+   # Create sample data for testing
+   python src/train_clip.py --create_sample_data
+   
+   # Resume from checkpoint
+   python src/train_clip.py --config configs/clip_base.yaml --resume outputs/run_123/checkpoints/checkpoint-1000.pt
+   ```
+
+### Device Adaptation
+
+The training pipeline automatically:
+- ✅ Detects CUDA availability (RTX 3060 12GB recommended)
+- ✅ Falls back to CPU if CUDA unavailable
+- ✅ Auto-reduces batch size on OOM
+- ✅ Uses mixed precision on GPU for memory efficiency
+
+If you encounter memory issues:
+```bash
+# Force CPU training
+CUDA_VISIBLE_DEVICES="" python src/train_clip.py --config configs/clip_base.yaml
+
+# Or reduce batch size in config
+batch_size: 16  # or even smaller
+```
+
+### Monitoring Training
+
+- **W&B Integration**: Automatic logging to Weights & Biases
+- **Local Logs**: Saved to `outputs/{run_name}/logs/`
+- **Metrics**: Loss, retrieval R@1/5/10, similarity distributions
+
+### Inference with Trained Model
+
+```bash
+# Use your trained model for inference
+python src/main.py --model outputs/best_model --prompt "Your description"
+```
+
+### Optional Features
+
+**ONNX Export:**
+```bash
+python export_clip.py --model_path outputs/best_model --output_dir outputs/onnx
+```
+
+**Gradio Demo:**
+```bash
+python gradio_demo.py --model_path outputs/best_model
+```
+
+**Run Tests:**
+```bash
+python tests/test_clip_smoke.py
+```
+
+## 📊 Training Results
+
+After successful training, you'll find:
+- `outputs/{run_name}/best_model/` - Best performing model
+- `outputs/{run_name}/final_model/` - Final epoch model  
+- `outputs/{run_name}/checkpoints/` - Training checkpoints
+- `outputs/{run_name}/metrics_history.json` - Training metrics
+
 ## 📝 TODO / การพัฒนาต่อ
 
+- [x] ✅ CLIP Training Pipeline
+- [x] ✅ ONNX Export Support
+- [x] ✅ Gradio Web Interface
+- [x] ✅ Automatic Device Detection
+- [x] ✅ Mixed Precision Training
 - [ ] รองรับ video files
-- [ ] Web interface
 - [ ] Database integration
 - [ ] Multi-language prompts optimization
-- [ ] Performance benchmarking
+- [ ] Distributed training support
 - [ ] Docker containerization
 
 ## 🤝 การมีส่วนร่วม
