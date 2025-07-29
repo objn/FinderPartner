@@ -217,7 +217,12 @@ class CLIPWrapper(nn.Module):
         if config is None:
             state_path = model_path / 'training_state.pt'
             if state_path.exists():
-                state = torch.load(state_path, map_location='cpu')
+                try:
+                    # Try with weights_only=False for backwards compatibility
+                    state = torch.load(state_path, map_location='cpu', weights_only=False)
+                except Exception:
+                    # Fallback for older PyTorch versions
+                    state = torch.load(state_path, map_location='cpu')
                 config = state.get('config', {})
             else:
                 # Fallback config
@@ -233,7 +238,12 @@ class CLIPWrapper(nn.Module):
         # Load training state if available
         state_path = model_path / 'training_state.pt'
         if state_path.exists():
-            state = torch.load(state_path, map_location='cpu')
+            try:
+                # Try with weights_only=False for backwards compatibility
+                state = torch.load(state_path, map_location='cpu', weights_only=False)
+            except Exception:
+                # Fallback for older PyTorch versions
+                state = torch.load(state_path, map_location='cpu')
             if 'temperature' in state:
                 instance.temperature = nn.Parameter(state['temperature'])
         
