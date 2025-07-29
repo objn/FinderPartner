@@ -149,12 +149,13 @@ class CLIPPairedDataset(Dataset):
         }
 
 
-def auto_batch_size(target_mem_gb: float, base_batch_size: int = 32) -> int:
-    """Auto-tune batch size based on available GPU memory
+def auto_batch_size(target_mem_gb: float, base_batch_size: int = 32, dataset_size: int = None) -> int:
+    """Auto-tune batch size based on available GPU memory and dataset size
     
     Args:
         target_mem_gb: Target memory usage in GB
         base_batch_size: Base batch size to start with
+        dataset_size: Size of dataset (to avoid batch size larger than dataset)
         
     Returns:
         Adjusted batch size
@@ -162,31 +163,48 @@ def auto_batch_size(target_mem_gb: float, base_batch_size: int = 32) -> int:
     try:
         import torch
         
+        # Start with memory-based adjustment
         if not torch.cuda.is_available():
             # For CPU, use smaller batch size
-            return min(base_batch_size, 16)
+            adjusted_batch_size = min(base_batch_size, 16)
+        else:
+            # Get available GPU memory
+            device_props = torch.cuda.get_device_properties(0)
+            total_mem_gb = device_props.total_memory / 1e9
+            
+            # Reserved memory for other processes
+            reserved_mem_gb = torch.cuda.memory_reserved(0) / 1e9
+            available_mem_gb = total_mem_gb - reserved_mem_gb - 2.0  # Keep 2GB buffer
+            
+            if available_mem_gb < target_mem_gb:
+                # Reduce batch size proportionally
+                scale_factor = available_mem_gb / target_mem_gb
+                adjusted_batch_size = max(1, int(base_batch_size * scale_factor))
+            else:
+                adjusted_batch_size = base_batch_size
         
-        # Get available GPU memory
-        device_props = torch.cuda.get_device_properties(0)
-        total_mem_gb = device_props.total_memory / 1e9
+        # Adjust based on dataset size
+        if dataset_size is not None and dataset_size > 0:
+            # Batch size should not be larger than dataset size
+            adjusted_batch_size = min(adjusted_batch_size, dataset_size)
+            
+            # For very small datasets, use even smaller batch sizes
+            if dataset_size < 10:
+                adjusted_batch_size = min(adjusted_batch_size, 2)
+            elif dataset_size < 50:
+                adjusted_batch_size = min(adjusted_batch_size, 8)
         
-        # Reserved memory for other processes
-        reserved_mem_gb = torch.cuda.memory_reserved(0) / 1e9
-        available_mem_gb = total_mem_gb - reserved_mem_gb - 2.0  # Keep 2GB buffer
+        # Ensure minimum batch size of 1
+        adjusted_batch_size = max(1, adjusted_batch_size)
         
-        if available_mem_gb < target_mem_gb:
-            # Reduce batch size proportionally
-            scale_factor = available_mem_gb / target_mem_gb
-            adjusted_batch_size = max(1, int(base_batch_size * scale_factor))
-            logger.info(f"Reducing batch size from {base_batch_size} to {adjusted_batch_size} "
-                       f"due to memory constraints ({available_mem_gb:.1f}GB available)")
-            return adjusted_batch_size
+        if adjusted_batch_size != base_batch_size:
+            logger.info(f"Adjusted batch size from {base_batch_size} to {adjusted_batch_size}")
         
-        return base_batch_size
+        return adjusted_batch_size
         
     except Exception as e:
         logger.warning(f"Error in auto batch size adjustment: {e}")
-        return base_batch_size
+        return max(1, min(base_batch_size, 8))  # Safe fallback
 
 
 def create_dataloaders(config: Dict) -> Tuple[DataLoader, DataLoader]:
@@ -201,14 +219,7 @@ def create_dataloaders(config: Dict) -> Tuple[DataLoader, DataLoader]:
     # Initialize tokenizer
     tokenizer = CLIPTokenizer.from_pretrained(config['model_name'])
     
-    # Auto-adjust batch size
-    batch_size = auto_batch_size(
-        target_mem_gb=config.get('target_memory_gb', 8.0),
-        base_batch_size=config['batch_size']
-    )
-    config['batch_size'] = batch_size  # Update config with adjusted batch size
-    
-    # Create datasets
+    # Create datasets first to get their sizes
     train_dataset = CLIPPairedDataset(
         csv_file=config['train_csv'],
         images_dir=config['train_images_dir'],
@@ -225,6 +236,15 @@ def create_dataloaders(config: Dict) -> Tuple[DataLoader, DataLoader]:
         max_length=config.get('max_length', 77)
     )
     
+    # Auto-adjust batch size based on dataset size
+    min_dataset_size = min(len(train_dataset), len(val_dataset))
+    batch_size = auto_batch_size(
+        target_mem_gb=config.get('target_memory_gb', 8.0),
+        base_batch_size=config['batch_size'],
+        dataset_size=min_dataset_size
+    )
+    config['batch_size'] = batch_size  # Update config with adjusted batch size
+    
     # Create dataloaders
     train_loader = DataLoader(
         train_dataset,
@@ -232,7 +252,7 @@ def create_dataloaders(config: Dict) -> Tuple[DataLoader, DataLoader]:
         shuffle=True,
         num_workers=config.get('num_workers', 4),
         pin_memory=torch.cuda.is_available(),
-        drop_last=True
+        drop_last=False  # Don't drop last batch for small datasets
     )
     
     val_loader = DataLoader(
@@ -241,7 +261,7 @@ def create_dataloaders(config: Dict) -> Tuple[DataLoader, DataLoader]:
         shuffle=False,
         num_workers=config.get('num_workers', 4),
         pin_memory=torch.cuda.is_available(),
-        drop_last=False
+        drop_last=False  # Don't drop last batch for small datasets
     )
     
     logger.info(f"Created dataloaders: train={len(train_dataset)} samples, "

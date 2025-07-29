@@ -8,13 +8,13 @@ max_length: 77
 temperature: 0.07
 
 # Training Configuration
-batch_size: 32          # Will be auto-reduced if OOM occurs
-epochs: 5
+batch_size: 4           # Reduced for small dataset - will be auto-reduced if OOM occurs
+epochs: 3               # Reduced for quick testing
 lr: 5.0e-5
 weight_decay: 0.01
-warmup_steps: 500
-save_steps: 1000
-eval_steps: 500
+warmup_steps: 10        # Reduced for small dataset
+save_steps: 5           # Save more frequently for small dataset
+eval_steps: 5           # Evaluate more frequently
 gradient_accumulation_steps: 1
 max_grad_norm: 1.0
 
@@ -45,4 +45,4 @@ mixed_precision: true
 
 # Evaluation Configuration
 compute_retrieval_metrics: true
-retrieval_k_values: [1, 5, 10]
+retrieval_k_values: [1, 2, 3]  # Reduced for small dataset

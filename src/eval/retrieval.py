@@ -29,15 +29,27 @@ def compute_retrieval_metrics(
     device = image_embeds.device
     batch_size = image_embeds.shape[0]
     
+    # Skip if batch size is too small
+    if batch_size == 0:
+        return {}
+    
     # Compute similarity matrix
     similarity_matrix = torch.matmul(image_embeds, text_embeds.t())
     
     metrics = {}
     
+    # Filter k_values to valid range
+    valid_k_values = [k for k in k_values if k <= batch_size]
+    
+    if not valid_k_values:
+        logger.warning(f"No valid k values for batch size {batch_size}. Available: {k_values}")
+        return metrics
+    
     # Image-to-text retrieval
-    for k in k_values:
+    for k in valid_k_values:
         # Get top-k text indices for each image
-        _, top_k_indices = torch.topk(similarity_matrix, k, dim=1)
+        k_actual = min(k, batch_size)  # Ensure k doesn't exceed batch size
+        _, top_k_indices = torch.topk(similarity_matrix, k_actual, dim=1)
         
         # Check if correct text (same index) is in top-k
         correct_indices = torch.arange(batch_size, device=device).unsqueeze(1)
@@ -47,9 +59,10 @@ def compute_retrieval_metrics(
         metrics[f'image_to_text_recall@{k}'] = recall_at_k
     
     # Text-to-image retrieval
-    for k in k_values:
+    for k in valid_k_values:
         # Get top-k image indices for each text
-        _, top_k_indices = torch.topk(similarity_matrix.t(), k, dim=1)
+        k_actual = min(k, batch_size)  # Ensure k doesn't exceed batch size
+        _, top_k_indices = torch.topk(similarity_matrix.t(), k_actual, dim=1)
         
         # Check if correct image (same index) is in top-k
         correct_indices = torch.arange(batch_size, device=device).unsqueeze(1)
@@ -59,7 +72,7 @@ def compute_retrieval_metrics(
         metrics[f'text_to_image_recall@{k}'] = recall_at_k
     
     # Compute mean recall across both directions
-    for k in k_values:
+    for k in valid_k_values:
         img_to_text = metrics[f'image_to_text_recall@{k}']
         text_to_img = metrics[f'text_to_image_recall@{k}']
         metrics[f'mean_recall@{k}'] = (img_to_text + text_to_img) / 2
@@ -254,8 +267,23 @@ class MetricsTracker:
         """
         import json
         
+        # Convert any tensors to float values for JSON serialization
+        serializable_history = {}
+        for metric_name, entries in self.history.items():
+            serializable_history[metric_name] = []
+            for entry in entries:
+                serializable_entry = {}
+                for key, value in entry.items():
+                    if hasattr(value, 'item'):  # PyTorch tensor
+                        serializable_entry[key] = value.item()
+                    elif isinstance(value, (int, float, str, bool, type(None))):
+                        serializable_entry[key] = value
+                    else:
+                        serializable_entry[key] = str(value)
+                serializable_history[metric_name].append(serializable_entry)
+        
         with open(filepath, 'w') as f:
-            json.dump(self.history, f, indent=2)
+            json.dump(serializable_history, f, indent=2)
         
         logger.info(f"Metrics history saved to {filepath}")
     

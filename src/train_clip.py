@@ -214,14 +214,26 @@ def train_step(
     
     # Forward pass with mixed precision
     if scaler is not None:
-        with torch.cuda.amp.autocast():
-            outputs = model(
-                pixel_values=pixel_values,
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                return_loss=True
-            )
-            loss = outputs['loss'] / gradient_accumulation_steps
+        try:
+            # Use new API if available
+            with torch.amp.autocast('cuda'):
+                outputs = model(
+                    pixel_values=pixel_values,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    return_loss=True
+                )
+                loss = outputs['loss'] / gradient_accumulation_steps
+        except (AttributeError, TypeError):
+            # Fallback to old API
+            with torch.cuda.amp.autocast():
+                outputs = model(
+                    pixel_values=pixel_values,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    return_loss=True
+                )
+                loss = outputs['loss'] / gradient_accumulation_steps
         
         # Backward pass with gradient scaling
         scaler.scale(loss).backward()
@@ -278,7 +290,11 @@ def main():
     # Setup mixed precision scaler
     scaler = None
     if device.type == 'cuda' and config.get('mixed_precision', True):
-        scaler = torch.cuda.amp.GradScaler()
+        try:
+            # Use new API if available, fallback to old one
+            scaler = torch.amp.GradScaler('cuda')
+        except AttributeError:
+            scaler = torch.cuda.amp.GradScaler()
         logger.info("Mixed precision training enabled")
     
     try:
@@ -349,7 +365,7 @@ def main():
                         optimizer.step()
                     
                     optimizer.zero_grad()
-                    scheduler.step()
+                    scheduler.step()  # Step scheduler after optimizer
                     step += 1
                 
                 # Accumulate metrics
@@ -363,7 +379,7 @@ def main():
                 })
                 
                 # Evaluation
-                if step % config.get('eval_steps', 500) == 0:
+                if step % config.get('eval_steps', 500) == 0 and step > 0:
                     logger.info("Running validation...")
                     val_metrics = evaluate_model(
                         model, val_loader, device,
@@ -372,7 +388,7 @@ def main():
                     )
                     
                     # Log metrics
-                    train_loss = epoch_loss / num_batches
+                    train_loss = epoch_loss / max(num_batches, 1)
                     all_metrics = {
                         'train/loss': train_loss,
                         'train/lr': scheduler.get_last_lr()[0],
@@ -394,9 +410,9 @@ def main():
                               f"val_loss={val_metrics.get('loss', 0):.4f}")
                 
                 # Save checkpoint
-                if step % config.get('save_steps', 1000) == 0:
+                if step % config.get('save_steps', 1000) == 0 and step > 0:
                     current_metrics = {
-                        'train_loss': epoch_loss / num_batches,
+                        'train_loss': epoch_loss / max(num_batches, 1),
                         'val_loss': metrics_tracker.get_latest('val/loss')
                     }
                     
@@ -407,15 +423,21 @@ def main():
                     
                     # Save best model
                     val_loss = current_metrics['val_loss']
-                    if val_loss < best_val_loss:
+                    if val_loss < best_val_loss and val_loss > 0:
                         best_val_loss = val_loss
                         best_model_dir = experiment_dir / 'best_model'
                         model.save_pretrained(str(best_model_dir))
                         logger.info(f"New best model saved (val_loss: {val_loss:.4f})")
             
             # End of epoch logging
-            avg_epoch_loss = epoch_loss / num_batches
+            avg_epoch_loss = epoch_loss / max(num_batches, 1)  # Avoid division by zero
             logger.info(f"Epoch {epoch + 1} completed. Average loss: {avg_epoch_loss:.4f}")
+            
+            # Handle case where no batches were processed
+            if num_batches == 0:
+                logger.warning(f"No batches processed in epoch {epoch + 1}. Check batch size and dataset size.")
+                logger.warning(f"Dataset sizes: train={len(train_loader.dataset)}, batch_size={config['batch_size']}")
+                break
         
         # Final evaluation
         logger.info("Running final evaluation...")
